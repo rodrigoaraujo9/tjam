@@ -1,0 +1,68 @@
+CLI app that allows to play live with friends p2p fashion encrypted distributed
+all hear what all are playing like a band
+each can synthesize sounds and bind them to keys and play
+press record to record session as wav
+
+-> encrypted
+-> p2p -> maybe the one that owns session is responsible for distributing audio feedback and holds the timeline
+
+
+Separate threads:
+
+Audio thread (real-time, high priority) - synthesis & playback
+Network thread (tokio async) - P2P communication
+Use lock-free ring buffers (ringbuf) to pass audio data between them
+
+
+Audio mixing approach:
+
+Each peer sends their audio stream to the session owner
+Session owner mixes all streams and broadcasts back to everyone
+Use opus codec (audiopus crate) to compress audio before sending (reduces bandwidth ~10x)
+
+
+Latency optimization:
+
+Small buffer sizes (128-256 samples)
+UDP-based transport (QUIC or libp2p with custom protocol)
+Target <50ms round-trip latency for playable experience
+
+
+
+Core Architecture Libraries
+Networking & P2P:
+
+libp2p - Industry-standard P2P networking framework with built-in encryption (noise protocol), peer discovery, and NAT traversal
+quinn or s2n-quic - QUIC protocol for low-latency UDP with built-in encryption (alternative to libp2p if you want more control)
+
+Audio:
+
+cpal - Cross-platform audio I/O (recording/playback)
+fundsp or dasp - Audio synthesis and DSP processing
+hound - WAV file encoding/decoding for session recording
+rubato - Sample rate conversion if needed
+
+Encryption:
+
+ring or rustls - Modern cryptography (libp2p uses these under the hood)
+chacha20poly1305 - Fast authenticated encryption for audio streams
+If using libp2p, encryption is handled via Noise protocol automatically
+
+Performance & Concurrency:
+
+tokio - Async runtime for networking
+crossbeam - Lock-free data structures for audio thread communication
+ringbuf - Lock-free ring buffers for passing audio between threads
+
+
+
+
+
+ratatui for visual interface
+https://ratatui.rs/
+
+cpal for lowlevel audio
+
+rodio for playback
+
+sounds nice
