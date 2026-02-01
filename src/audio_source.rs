@@ -1,5 +1,5 @@
 use rodio::Source;
-use rodio::source::{SawtoothWave, SineWave};
+use rodio::source::{SawtoothWave, SineWave, TriangleWave};
 use std::time::Duration;
 use crate::config::AMP_DEFAULT;
 
@@ -31,7 +31,7 @@ impl Default for WaveSource {
 impl AudioSource for WaveSource {
     fn create_source(&self, frequency: f32) -> Box<dyn Source<Item = f32> + Send> {
         Box::new(
-            SineWave::new(frequency)
+            TriangleWave::new(frequency)
                 .take_duration(self.duration)
                 .amplify(self.amplitude)
         )

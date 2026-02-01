@@ -1,66 +1,171 @@
-mod key;
-mod play;
-mod config;
-mod state;
-mod audio_source;
-mod audio_capture;
-mod display;
-mod visualizer;
+use std::io;
+use std::time::Duration;
 
 use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
-use std::time::Duration;
-use tokio::sync::Notify;
-use std::sync::Arc;
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    Terminal,
+};
+use tokio::task::LocalSet;
 
-#[tokio::main]
+use crate::audio_capture::Matrix;
+use crate::play::run_audio;
+
+use crate::ui::oscilloscope_widget::{OscilloscopeState, OscilloscopeWidget};
+
+
+mod audio_capture;
+mod audio_source;
+mod config;
+mod key;
+mod play;
+mod ui;
+mod state;
+
+struct App {
+    scope: OscilloscopeState,
+    cached_capture: Option<std::sync::Arc<audio_capture::AudioCapture>>,
+}
+
+impl App {
+    fn new() -> Self {
+        Self {
+            scope: OscilloscopeState::new(),
+            cached_capture: None,
+        }
+    }
+
+    async fn refresh_capture(&mut self) {
+        if self.cached_capture.is_none() {
+            self.cached_capture = state::get_audio_capture().await;
+        }
+    }
+
+    fn read_audio_frame(&self) -> Option<Matrix<f64>> {
+        self.cached_capture.as_ref()?.get_data()
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
+    let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    terminal.hide_cursor()?;
+    terminal.clear()?;
 
-    let _ = std::thread::spawn(|| { // audio handle
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            if let Err(e) = play::run_audio().await {
-                eprintln!("Audio error: {:?}", e);
+    let local = LocalSet::new();
+
+    let res = local
+        .run_until(async {
+            let audio_handle = tokio::task::spawn_local(async {
+                if let Err(e) = run_audio().await {
+                    eprintln!("audio error: {e}");
+                }
+            });
+
+            let mut app = App::new();
+            let tick = Duration::from_millis(16);
+
+            let tui_res = run_tui(&mut terminal, &mut app, tick).await;
+
+            audio_handle.abort();
+
+            tui_res
+        })
+        .await;
+
+    disable_raw_mode().ok();
+    execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
+    terminal.show_cursor().ok();
+
+    res?;
+    Ok(())
+}
+
+async fn run_tui(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    tick: Duration,
+) -> io::Result<()> {
+    loop {
+        app.refresh_capture().await;
+
+        let audio_frame = app.read_audio_frame();
+
+        terminal.draw(|f| {
+            let area = f.area();
+
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0)])
+                .split(area);
+
+            let scope_area = chunks[0];
+
+            let widget = OscilloscopeWidget::new(audio_frame.as_ref());
+            f.render_stateful_widget(widget, scope_area, &mut app.scope);
+        })?;
+
+        while event::poll(Duration::from_millis(0))? {
+            let ev = event::read()?;
+
+            if let Event::Key(k) = &ev {
+                if k.kind != KeyEventKind::Press {
+                    continue;
+                }
             }
-        });
-    });
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+            if is_quit_event(&ev) {
+                return Ok(());
+            }
 
-    let mut visualizer = visualizer::VisualizerApp::new();
+            if handle_global_controls(&ev).await {
+                return Ok(());
+            }
 
-    let mut quit = false;
-    while !quit {
-        let audio_data = if let Some(capture) = state::get_audio_capture().await {
-            capture.get_data()
-        } else {
-            None
-        };
-
-        if let Err(e) = visualizer.draw(&mut terminal, audio_data) {
-            eprintln!("Draw error: {:?}", e);
-            break;
+            if app.scope.handle_event(ev) {
+                return Ok(());
+            }
         }
 
-        if let Ok(should_quit) = visualizer.handle_events() {
-            quit = should_quit;
-        }
+        tokio::time::sleep(tick).await;
+    }
+}
 
-        tokio::time::sleep(Duration::from_millis(16)).await; // ~60fps
+fn is_quit_event(ev: &Event) -> bool {
+    match ev {
+        Event::Key(k) if k.modifiers == KeyModifiers::CONTROL => {
+            matches!(k.code, KeyCode::Char('c') | KeyCode::Char('q') | KeyCode::Char('w'))
+        }
+        _ => false,
+    }
+}
+
+async fn handle_global_controls(ev: &Event) -> bool {
+    let Event::Key(k) = ev else { return false; };
+
+    match k.code {
+        KeyCode::Char('q') => return true,
+        KeyCode::Char('m') => {
+            state::toggle_mute().await;
+        }
+        KeyCode::Char('-') | KeyCode::Char('_') => {
+            let v = state::get_volume().await;
+            state::set_volume(v - 0.05).await;
+        }
+        KeyCode::Char('+') | KeyCode::Char('=') => {
+            let v = state::get_volume().await;
+            state::set_volume(v + 0.05).await;
+        }
+        _ => {}
     }
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
-
-    Ok(())
+    false
 }
