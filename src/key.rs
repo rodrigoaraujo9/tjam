@@ -19,23 +19,23 @@ pub enum Note {
 }
 
 impl Note {
-    pub fn from_semitone(semitone: u32) -> Option<Self> {
-        match semitone % 12 {
-            0 => Some(Note::C),
-            1 => Some(Note::Db),
-            2 => Some(Note::D),
-            3 => Some(Note::Eb),
-            4 => Some(Note::E),
-            5 => Some(Note::F),
-            6 => Some(Note::Gb),
-            7 => Some(Note::G),
-            8 => Some(Note::Ab),
-            9 => Some(Note::A),
-            10 => Some(Note::Bb),
-            11 => Some(Note::B),
-            _ => None,
-        }
-    }
+    // pub fn from_semitone(semitone: u32) -> Option<Self> {
+    //     match semitone % 12 {
+    //         0 => Some(Note::C),
+    //         1 => Some(Note::Db),
+    //         2 => Some(Note::D),
+    //         3 => Some(Note::Eb),
+    //         4 => Some(Note::E),
+    //         5 => Some(Note::F),
+    //         6 => Some(Note::Gb),
+    //         7 => Some(Note::G),
+    //         8 => Some(Note::Ab),
+    //         9 => Some(Note::A),
+    //         10 => Some(Note::Bb),
+    //         11 => Some(Note::B),
+    //         _ => None,
+    //     }
+    // }
 
     pub fn semitone(&self) -> u32 {
         *self as u32
@@ -52,13 +52,13 @@ impl Key {
         Self { note, octave }
     }
 
-    pub fn get_note(&self) -> Note {
-        self.note
-    }
+    // pub fn get_note(&self) -> Note {
+    //     self.note
+    // }
 
-    pub fn get_octave(&self) -> i32 {
-        self.octave
-    }
+    // pub fn get_octave(&self) -> i32 {
+    //     self.octave
+    // }
 
     pub fn frequency(&self) -> f32 {
         // use ref A4 (which is at octave 4, semitone 9) -> standart
