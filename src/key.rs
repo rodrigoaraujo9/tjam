@@ -1,4 +1,6 @@
 use fundsp::math::pow;
+use device_query::Keycode;
+
 
 pub const BASE_FREQ:f32 = 440.0; //base frequency in Hz-> A4
 
@@ -70,28 +72,60 @@ impl Key {
     }
 
     pub fn from_keycode(key: char) -> Option<Self> {
-            match key.to_ascii_lowercase() {
-                'a' => Some(Key::new(Note::C, 4)),
-                's' => Some(Key::new(Note::D, 4)),
-                'd' => Some(Key::new(Note::E, 4)),
-                'f' => Some(Key::new(Note::F, 4)),
-                'g' => Some(Key::new(Note::G, 4)),
-                'h' => Some(Key::new(Note::A, 4)),
-                'j' => Some(Key::new(Note::B, 4)),
-                'k' => Some(Key::new(Note::C, 5)),
-                'l' => Some(Key::new(Note::D, 5)),
-                ';' => Some(Key::new(Note::E, 5)),
-                '\'' => Some(Key::new(Note::F, 5)),
+        match key.to_ascii_lowercase() {
+            'a' => Some(Key::new(Note::C, 4)),
+            's' => Some(Key::new(Note::D, 4)),
+            'd' => Some(Key::new(Note::E, 4)),
+            'f' => Some(Key::new(Note::F, 4)),
+            'g' => Some(Key::new(Note::G, 4)),
+            'h' => Some(Key::new(Note::A, 4)),
+            'j' => Some(Key::new(Note::B, 4)),
+            'k' => Some(Key::new(Note::C, 5)),
+            'l' => Some(Key::new(Note::D, 5)),
+            ';' => Some(Key::new(Note::E, 5)),
+            '\'' => Some(Key::new(Note::F, 5)),
 
-                'w' => Some(Key::new(Note::Db, 4)),
-                'e' => Some(Key::new(Note::Eb, 4)),
-                't' => Some(Key::new(Note::Gb, 4)),
-                'y' => Some(Key::new(Note::Ab, 4)),
-                'u' => Some(Key::new(Note::Bb, 4)),
-                'o' => Some(Key::new(Note::Db, 5)),
-                'p' => Some(Key::new(Note::Eb, 5)),
+            'w' => Some(Key::new(Note::Db, 4)),
+            'e' => Some(Key::new(Note::Eb, 4)),
+            't' => Some(Key::new(Note::Gb, 4)),
+            'y' => Some(Key::new(Note::Ab, 4)),
+            'u' => Some(Key::new(Note::Bb, 4)),
+            'o' => Some(Key::new(Note::Db, 5)),
+            'p' => Some(Key::new(Note::Eb, 5)),
 
-                _ => None,
-            }
+            _ => None,
         }
+    }
+
+    pub fn keycode_to_char(keycode: &Keycode) -> Option<char> {
+        match keycode {
+            Keycode::A => Some('a'),
+            Keycode::B => Some('b'),
+            Keycode::C => Some('c'),
+            Keycode::D => Some('d'),
+            Keycode::E => Some('e'),
+            Keycode::F => Some('f'),
+            Keycode::G => Some('g'),
+            Keycode::H => Some('h'),
+            Keycode::I => Some('i'),
+            Keycode::J => Some('j'),
+            Keycode::K => Some('k'),
+            Keycode::L => Some('l'),
+            Keycode::M => Some('m'),
+            Keycode::N => Some('n'),
+            Keycode::O => Some('o'),
+            Keycode::P => Some('p'),
+            Keycode::Q => Some('q'),
+            Keycode::R => Some('r'),
+            Keycode::S => Some('s'),
+            Keycode::T => Some('t'),
+            Keycode::U => Some('u'),
+            Keycode::V => Some('v'),
+            Keycode::W => Some('w'),
+            Keycode::X => Some('x'),
+            Keycode::Y => Some('y'),
+            Keycode::Z => Some('z'),
+            _ => None,
+        }
+    }
 }
