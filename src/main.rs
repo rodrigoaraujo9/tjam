@@ -5,9 +5,7 @@ use rodio::source::{SineWave, Source};
 use device_query::{DeviceQuery, DeviceState, Keycode};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 mod key;
-use key::Key;
-
-
+use key::{Key, keycode_to_char};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let stream_handle = OutputStreamBuilder::open_default_stream()
@@ -22,15 +20,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let keys = device_state.get_keys();
 
-        if keys.contains(&Keycode::Escape) {
+        if keys.contains(&Keycode::Escape) || (keys.contains(&Keycode::C)
+                                                && keys.contains(&Keycode::LControl)) {
             break;
         }
 
-
-
         for keycode in &keys {
             if !prev_keys.contains(keycode) {
-                if let Some(c) = Key::keycode_to_char(keycode) {
+                if let Some(c) = keycode_to_char(keycode) {
                     if let Some(key) = Key::from_keycode(c) {
                         let freq = key.frequency();
                         let sink = Sink::connect_new(&stream_handle.mixer());
@@ -46,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         for keycode in &prev_keys {
             if !keys.contains(keycode) {
-                if let Some(c) = Key::keycode_to_char(keycode) {
+                if let Some(c) = keycode_to_char(keycode) {
                     if let Some(sink) = active_sinks.remove(&c) {
                         sink.stop();
                     }
