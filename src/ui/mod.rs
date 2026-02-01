@@ -1,1 +1,1 @@
-pub mod oscilloscope_widget;
+pub mod visualizer_widget;

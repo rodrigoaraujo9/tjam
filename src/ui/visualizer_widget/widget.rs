@@ -6,21 +6,22 @@ use ratatui::{
 };
 
 use crate::audio_capture::Matrix;
-use super::types::Dimension;
-use super::OscilloscopeState;
 
-pub struct OscilloscopeWidget<'a> {
+use super::types::Dimension;
+use super::VisualizerState;
+
+pub struct VisualizerWidget<'a> {
     audio: Option<&'a Matrix<f64>>,
 }
 
-impl<'a> OscilloscopeWidget<'a> {
+impl<'a> VisualizerWidget<'a> {
     pub fn new(audio: Option<&'a Matrix<f64>>) -> Self {
         Self { audio }
     }
 }
 
-impl<'a> StatefulWidget for OscilloscopeWidget<'a> {
-    type State = OscilloscopeState;
+impl<'a> StatefulWidget for VisualizerWidget<'a> {
+    type State = VisualizerState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         state.update(self.audio);
@@ -52,27 +53,29 @@ impl<'a> StatefulWidget for OscilloscopeWidget<'a> {
         let datasets: Vec<Dataset> = state.datasets().iter().map(Dataset::from).collect();
 
         let chart = Chart::new(datasets)
-            .x_axis(state.scope.axis(&state.graph, Dimension::X))
-            .y_axis(state.scope.axis(&state.graph, Dimension::Y));
+            .x_axis(state.current_display().axis(&state.graph, Dimension::X))
+            .y_axis(state.current_display().axis(&state.graph, Dimension::Y));
 
+        // Avoid trait ambiguity: call Widget::render explicitly.
         ratatui::widgets::Widget::render(chart, chart_area, buf);
     }
 }
 
-fn render_header(area: Rect, buf: &mut Buffer, state: &OscilloscopeState) {
+fn render_header(area: Rect, buf: &mut Buffer, state: &VisualizerState) {
     let fps = state.fps();
-    let scope_header = state.scope.header(&state.graph);
+    let mode = state.current_display().mode_str();
+    let module_header = state.current_display().header(&state.graph);
 
     let title_color = *state.graph.palette.first().unwrap();
 
     let table = Table::new(
         vec![Row::new(vec![
-            Cell::from("oscillo::tjam").style(
+            Cell::from(format!("{}::tjam", mode)).style(
                 Style::default()
                     .fg(title_color)
                     .add_modifier(Modifier::BOLD),
             ),
-            Cell::from(scope_header),
+            Cell::from(module_header),
             Cell::from(format!("-{:.2}x+", state.graph.scale)),
             Cell::from(format!("{}/{} spf", state.graph.samples, state.graph.width)),
             Cell::from(format!("{}fps", fps)),

@@ -1,8 +1,11 @@
+use crossterm::event::Event;
 use ratatui::{
     style::{Color, Style},
     symbols::Marker,
-    widgets::{Dataset, GraphType},
+    widgets::{Axis, Dataset, GraphType},
 };
+
+use crate::audio_capture::Matrix;
 
 pub enum Dimension {
     X,
@@ -51,6 +54,23 @@ impl GraphConfig {
             .get(index % self.palette.len())
             .unwrap_or(&Color::White)
     }
+}
+
+pub trait DisplayMode {
+    fn axis(&self, cfg: &GraphConfig, dimension: Dimension) -> Axis;
+    fn process(&mut self, cfg: &GraphConfig, data: &Matrix<f64>) -> Vec<DataSet>;
+    fn mode_str(&self) -> &'static str;
+
+    fn channel_name(&self, index: usize) -> String {
+        format!("{}", index)
+    }
+    fn header(&self, _cfg: &GraphConfig) -> String {
+        "".into()
+    }
+    fn references(&self, _cfg: &GraphConfig) -> Vec<DataSet> {
+        vec![]
+    }
+    fn handle(&mut self, _event: Event) {}
 }
 
 pub struct DataSet {

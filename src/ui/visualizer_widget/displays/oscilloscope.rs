@@ -7,7 +7,7 @@ use ratatui::{
 
 use crate::audio_capture::Matrix;
 
-use super::types::{update_value_f, update_value_i, DataSet, Dimension, GraphConfig};
+use super::super::types::{update_value_f, update_value_i, DataSet, Dimension, DisplayMode, GraphConfig};
 
 pub struct Oscilloscope {
     pub triggering: bool,
@@ -33,30 +33,39 @@ impl Oscilloscope {
     pub fn reset(&mut self) {
         *self = Self::default();
     }
+}
 
-    pub fn header(&self, _cfg: &GraphConfig) -> String {
+impl DisplayMode for Oscilloscope {
+    fn mode_str(&self) -> &'static str {
+        "oscillo"
+    }
+
+    fn channel_name(&self, index: usize) -> String {
+        match index {
+            0 => "L".into(),
+            1 => "R".into(),
+            _ => format!("{}", index),
+        }
+    }
+
+    fn header(&self, _: &GraphConfig) -> String {
         if self.triggering {
             format!(
                 "{} {:.0}{} trigger",
                 if self.falling_edge { "v" } else { "^" },
                 self.threshold,
-                if self.depth > 1 {
-                    format!(":{}", self.depth)
-                } else {
-                    "".into()
-                }
+                if self.depth > 1 { format!(":{}", self.depth) } else { "".into() }
             )
         } else {
             "live".into()
         }
     }
 
-    pub fn axis(&self, cfg: &GraphConfig, dimension: Dimension) -> Axis {
+    fn axis(&self, cfg: &GraphConfig, dimension: Dimension) -> Axis {
         let (name, bounds) = match dimension {
             Dimension::X => ("time -", [0.0, cfg.samples as f64]),
             Dimension::Y => ("| amplitude", [-cfg.scale, cfg.scale]),
         };
-
         let mut a = Axis::default();
         if cfg.show_ui {
             a = a.title(Span::styled(name, Style::default().fg(cfg.labels_color)));
@@ -64,7 +73,7 @@ impl Oscilloscope {
         a.style(Style::default().fg(cfg.axis_color)).bounds(bounds)
     }
 
-    pub fn references(&self, cfg: &GraphConfig) -> Vec<DataSet> {
+    fn references(&self, cfg: &GraphConfig) -> Vec<DataSet> {
         vec![DataSet::new(
             None,
             vec![(0.0, 0.0), (cfg.samples as f64, 0.0)],
@@ -74,7 +83,7 @@ impl Oscilloscope {
         )]
     }
 
-    pub fn process(&mut self, cfg: &GraphConfig, data: &Matrix<f64>) -> Vec<DataSet> {
+    fn process(&mut self, cfg: &GraphConfig, data: &Matrix<f64>) -> Vec<DataSet> {
         let mut out = Vec::new();
 
         let mut trigger_offset = 0usize;
@@ -106,12 +115,8 @@ impl Oscilloscope {
             let mut tmp = Vec::new();
 
             for (i, sample) in channel.iter().enumerate() {
-                if *sample < min {
-                    min = *sample
-                };
-                if *sample > max {
-                    max = *sample
-                };
+                if *sample < min { min = *sample; }
+                if *sample > max { max = *sample; }
 
                 if i >= trigger_offset {
                     tmp.push(((i - trigger_offset) as f64, *sample));
@@ -129,14 +134,10 @@ impl Oscilloscope {
             }
 
             out.push(DataSet::new(
-                Some(channel_name(n)),
+                Some(self.channel_name(n)),
                 tmp,
                 cfg.marker_type,
-                if cfg.scatter {
-                    GraphType::Scatter
-                } else {
-                    GraphType::Line
-                },
+                if cfg.scatter { GraphType::Scatter } else { GraphType::Line },
                 cfg.palette(n),
             ));
         }
@@ -144,7 +145,7 @@ impl Oscilloscope {
         out
     }
 
-    pub fn handle_event(&mut self, event: Event) {
+    fn handle(&mut self, event: Event) {
         if let Event::Key(key) = event {
             let magnitude = match key.modifiers {
                 KeyModifiers::SHIFT => 10.0,
@@ -152,7 +153,6 @@ impl Oscilloscope {
                 KeyModifiers::ALT => 0.2,
                 _ => 1.0,
             };
-
             match key.code {
                 KeyCode::PageUp => update_value_f(&mut self.threshold, 250.0, magnitude, 0.0..32768.0),
                 KeyCode::PageDown => update_value_f(&mut self.threshold, -250.0, magnitude, 0.0..32768.0),
@@ -163,27 +163,17 @@ impl Oscilloscope {
                 KeyCode::Char('-') => update_value_i(&mut self.depth, false, 1, 1.0, 1..65535),
                 KeyCode::Char('+') => update_value_i(&mut self.depth, true, 10, 1.0, 1..65535),
                 KeyCode::Char('_') => update_value_i(&mut self.depth, false, 10, 1.0, 1..65535),
-                KeyCode::Esc => self.reset(),
+                KeyCode::Esc => self.triggering = false,
                 _ => {}
             }
         }
     }
 }
 
-fn channel_name(index: usize) -> String {
-    match index {
-        0 => "L".into(),
-        1 => "R".into(),
-        _ => format!("{}", index),
-    }
-}
-
-#[allow(clippy::collapsible_else_if)]
 fn triggered(data: &[f64], index: usize, threshold: f64, depth: u32, falling_edge: bool) -> bool {
     if data.len() < index + (1 + depth as usize) {
         return false;
     }
-
     if falling_edge {
         if data[index] >= threshold {
             for i in 1..=depth as usize {

@@ -16,8 +16,7 @@ use tokio::task::LocalSet;
 use crate::audio_capture::Matrix;
 use crate::play::run_audio;
 
-use crate::ui::oscilloscope_widget::{OscilloscopeState, OscilloscopeWidget};
-
+use crate::ui::visualizer_widget::{VisualizerState, VisualizerWidget};
 
 mod audio_capture;
 mod audio_source;
@@ -28,21 +27,21 @@ mod ui;
 mod state;
 
 struct App {
-    scope: OscilloscopeState,
+    viz: VisualizerState,
     cached_capture: Option<std::sync::Arc<audio_capture::AudioCapture>>,
 }
 
 impl App {
     fn new() -> Self {
         Self {
-            scope: OscilloscopeState::new(),
+            viz: VisualizerState::new(),
             cached_capture: None,
         }
     }
 
     async fn refresh_capture(&mut self) {
         if self.cached_capture.is_none() {
-            self.cached_capture = state::get_audio_capture().await;
+            self.cached_capture = crate::state::get_audio_capture().await;
         }
     }
 
@@ -76,7 +75,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let tui_res = run_tui(&mut terminal, &mut app, tick).await;
 
             audio_handle.abort();
-
             tui_res
         })
         .await;
@@ -107,10 +105,10 @@ async fn run_tui(
                 .constraints([Constraint::Min(0)])
                 .split(area);
 
-            let scope_area = chunks[0];
+            let viz_area = chunks[0];
 
-            let widget = OscilloscopeWidget::new(audio_frame.as_ref());
-            f.render_stateful_widget(widget, scope_area, &mut app.scope);
+            let widget = VisualizerWidget::new(audio_frame.as_ref());
+            f.render_stateful_widget(widget, viz_area, &mut app.viz);
         })?;
 
         while event::poll(Duration::from_millis(0))? {
@@ -130,7 +128,7 @@ async fn run_tui(
                 return Ok(());
             }
 
-            if app.scope.handle_event(ev) {
+            if app.viz.handle_event(ev) {
                 return Ok(());
             }
         }
@@ -153,17 +151,20 @@ async fn handle_global_controls(ev: &Event) -> bool {
 
     match k.code {
         KeyCode::Char('q') => return true,
+
         KeyCode::Char('m') => {
-            state::toggle_mute().await;
+            crate::state::toggle_mute().await;
         }
+
         KeyCode::Char('-') | KeyCode::Char('_') => {
-            let v = state::get_volume().await;
-            state::set_volume(v - 0.05).await;
+            let v = crate::state::get_volume().await;
+            crate::state::set_volume(v - 0.05).await;
         }
         KeyCode::Char('+') | KeyCode::Char('=') => {
-            let v = state::get_volume().await;
-            state::set_volume(v + 0.05).await;
+            let v = crate::state::get_volume().await;
+            crate::state::set_volume(v + 0.05).await;
         }
+
         _ => {}
     }
 
