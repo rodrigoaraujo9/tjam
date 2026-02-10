@@ -11,7 +11,7 @@ use ratatui::widgets::{Block, Paragraph};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // run_audio().await
+    // run_audio().await;
     ratatui::run(|terminal| {
             terminal.draw(|frame| {
                 let block = Block::bordered().title("tjam");

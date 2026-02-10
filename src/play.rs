@@ -11,89 +11,76 @@ use crate::config::TICK;
 use crate::key::Key;
 use crate::state;
 
-
-pub struct Play {
-    _stream: OutputStream,
-    active_sinks: HashMap<Keycode, Sink>,
-    volume_notify: Arc<Notify>,
-    pause_notify: Arc<Notify>,
+pub struct PlayState {
+    pub stream: OutputStream,
+    pub active_sinks: HashMap<Keycode, Sink>,
+    pub volume_notify: Arc<Notify>,
+    pub mute_notify: Arc<Notify>,
 }
 
-impl Play {
+impl PlayState {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let stream = OutputStreamBuilder::open_default_stream()?;
         Ok(Self {
-            _stream: stream,
+            stream,
             active_sinks: HashMap::new(),
             volume_notify: Arc::new(Notify::new()),
-            pause_notify: Arc::new(Notify::new()),
+            mute_notify: Arc::new(Notify::new()),
         })
-    }
-
-    pub async fn play_note(&mut self, keycode: Keycode) {
-        if self.active_sinks.contains_key(&keycode) {
-            return;
-        }
-
-        if let Some(key) = Key::from_keycode(keycode) {
-            let freq = key.frequency();
-            let sink = Sink::connect_new(&self._stream.mixer());
-            let source = state::get_source().await;
-            let src = source.read().await;
-            let audio_source = src.create_source(freq);
-            let volume = state::get_volume().await;
-            sink.set_volume(volume);
-            if state::is_muted().await {
-                sink.pause();
-            }
-            sink.append(audio_source);
-            self.active_sinks.insert(keycode, sink);
-        }
-    }
-
-    pub fn stop_note(&mut self, keycode: Keycode) {
-        if let Some(sink) = self.active_sinks.remove(&keycode) {
-            sink.stop();
-        }
-    }
-
-    pub fn stop_all(&mut self) {
-        for (_, sink) in self.active_sinks.drain() {
-            sink.stop();
-        }
-    }
-
-    pub async fn sync_volume(&mut self) {
-        let volume = state::get_volume().await;
-        for sink in self.active_sinks.values_mut() {
-            sink.set_volume(volume);
-        }
-    }
-
-    pub async fn sync_muted_state(&mut self) {
-        if state::is_muted().await {
-            for sink in self.active_sinks.values_mut() {
-                sink.pause();
-            }
-        } else {
-            for sink in self.active_sinks.values_mut() {
-                sink.play();
-            }
-        }
-    }
-
-    pub fn get_volume_notify(&self) -> Arc<Notify> {
-        Arc::clone(&self.volume_notify)
-    }
-
-    pub fn get_muted_notify(&self) -> Arc<Notify> {
-        Arc::clone(&self.pause_notify)
     }
 }
 
-impl Drop for Play {
-    fn drop(&mut self) {
-        self.stop_all();
+pub async fn play_note(play_state: &mut PlayState, keycode: Keycode) {
+    if play_state.active_sinks.contains_key(&keycode) {
+        return;
+    }
+
+    if let Some(key) = Key::from_keycode(keycode) {
+        let freq = key.frequency();
+        let sink = Sink::connect_new(&play_state.stream.mixer());
+        let audio_state = state::get_state().await;
+        let src = audio_state.source.read().await;
+        let audio_source = src.create_source(freq);
+        let volume = *audio_state.volume.read().await;
+        sink.set_volume(volume);
+        if *audio_state.muted.read().await {
+            sink.pause();
+        }
+        sink.append(audio_source);
+        play_state.active_sinks.insert(keycode, sink);
+    }
+}
+
+pub fn stop_note(play_state: &mut PlayState, keycode: Keycode) {
+    if let Some(sink) = play_state.active_sinks.remove(&keycode) {
+        sink.stop();
+    }
+}
+
+pub fn stop_all(play_state: &mut PlayState) {
+    for (_, sink) in play_state.active_sinks.drain() {
+        sink.stop();
+    }
+}
+
+pub async fn sync_volume(play_state: &mut PlayState) {
+    let audio_state = state::get_state().await;
+    let volume = *audio_state.volume.read().await;
+    for sink in play_state.active_sinks.values_mut() {
+        sink.set_volume(volume);
+    }
+}
+
+pub async fn sync_muted_state(play_state: &mut PlayState) {
+    let audio_state = state::get_state().await;
+    if *audio_state.muted.read().await {
+        for sink in play_state.active_sinks.values_mut() {
+            sink.pause();
+        }
+    } else {
+        for sink in play_state.active_sinks.values_mut() {
+            sink.play();
+        }
     }
 }
 
@@ -124,12 +111,13 @@ pub async fn run_audio() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let mut audio = Play::new()?;
-    let volume_notify = audio.get_volume_notify();
-    let pause_notify = audio.get_muted_notify();
+    let mut play_state = PlayState::new()?;
+    let volume_notify = Arc::clone(&play_state.volume_notify);
+    let mute_notify = Arc::clone(&play_state.mute_notify);
 
-    state::set_volume_notify(volume_notify).await;
-    state::set_mute_notify(pause_notify).await;
+    let audio_state = state::get_state().await;
+    *audio_state.volume_notify.write().await = Some(volume_notify);
+    *audio_state.mute_notify.write().await = Some(mute_notify);
 
     let ctrl_c = ctrl_c();
     tokio::pin!(ctrl_c);
@@ -144,25 +132,25 @@ pub async fn run_audio() -> Result<(), Box<dyn std::error::Error>> {
                 match msg {
                     Some(Some((now, prev))) => {
                         for k in now.difference(&prev) {
-                            audio.play_note(*k).await;
+                            play_note(&mut play_state, *k).await;
                         }
                         for k in prev.difference(&now) {
-                            audio.stop_note(*k);
+                            stop_note(&mut play_state, *k);
                         }
                     }
                     Some(None) | None => break,
                 }
             }
-            _ = audio.volume_notify.notified() => {
-                audio.sync_volume().await;
+            _ = play_state.volume_notify.notified() => {
+                sync_volume(&mut play_state).await;
             }
-            _ = audio.pause_notify.notified() => {
-                audio.sync_muted_state().await;
+            _ = play_state.mute_notify.notified() => {
+                sync_muted_state(&mut play_state).await;
             }
         }
     }
 
-    audio.stop_all();
+    stop_all(&mut play_state);
     let _ = poll_handle.await;
 
     Ok(())
