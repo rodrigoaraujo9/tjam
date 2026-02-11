@@ -87,3 +87,12 @@ cpal for lowlevel audio
 rodio for playback
 
 sounds nice
+
+
+Generator = “what produces sound”
+
+Node = “what changes sound”
+
+PatchSource = “generator + chain of nodes”
+
+AudioState holds the current Box<dyn AudioSource> (your patch)

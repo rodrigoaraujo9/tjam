@@ -129,7 +129,6 @@ pub fn key_to_string(key: Key) -> String {
     format!("{}{}", note_name(key.note), key.octave)
 }
 
-// Trait implementations for backwards compatibility
 impl Key {
     #[inline]
     pub const fn new(note: Note, octave: i32) -> Self {
