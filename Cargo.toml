@@ -8,6 +8,7 @@ cpal = "0.17.1"
 crossterm = "0.29.0"
 device_query = "4.0.1"
 fundsp = "0.23.0"
+futures-util = "0.3.31"
 ratatui = "0.30.0"
 rodio = "0.21.1"
 tokio = {version ="1.49.0", features = ["full"]}

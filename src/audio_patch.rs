@@ -1,5 +1,4 @@
 use rodio::Source;
-use std::sync::Arc;
 
 pub type DynSrc = Box<dyn Source<Item = f32> + Send>;
 

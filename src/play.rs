@@ -1,17 +1,19 @@
 use device_query::{DeviceQuery, DeviceState, Keycode};
 use std::collections::{HashMap, HashSet};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
-use rodio::stream::{OutputStreamBuilder, OutputStream};
+use rodio::stream::{OutputStream, OutputStreamBuilder};
 use rodio::Sink;
 
-use tokio::signal::ctrl_c;
-use tokio::task;
-use tokio::sync::Notify;
-use std::sync::Arc;
+use tokio::{signal::ctrl_c, task};
 
 use crate::config::TICK;
 use crate::key::Key;
+use crate::patches::basic::{basic_source, BasicKind};
 use crate::state;
 
 pub struct PlayState {
@@ -22,14 +24,52 @@ pub struct PlayState {
 impl PlayState {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let stream = OutputStreamBuilder::open_default_stream()?;
-        Ok(Self {
-            stream,
-            active_sinks: HashMap::new(),
-        })
+        Ok(Self { stream, active_sinks: HashMap::new() })
+    }
+
+    fn stop_note(&mut self, keycode: Keycode) {
+        if let Some(sink) = self.active_sinks.remove(&keycode) {
+            sink.stop();
+        }
+    }
+
+    fn stop_all(&mut self) {
+        for (_, sink) in self.active_sinks.drain() {
+            sink.stop();
+        }
+    }
+
+    fn set_all_volume(&mut self, v: f32) {
+        for sink in self.active_sinks.values_mut() {
+            sink.set_volume(v);
+        }
+    }
+
+    fn set_all_muted(&mut self, muted: bool) {
+        if muted {
+            for sink in self.active_sinks.values_mut() { sink.pause(); }
+        } else {
+            for sink in self.active_sinks.values_mut() { sink.play(); }
+        }
     }
 }
 
-pub async fn play_note(play_state: &mut PlayState, keycode: Keycode) {
+#[derive(Clone, Copy)]
+struct RuntimeState {
+    volume: f32,
+    muted: bool,
+    kind: BasicKind,
+}
+
+fn publish_snapshot(tx: &tokio::sync::watch::Sender<state::AudioSnapshot>, rt: RuntimeState) {
+    let _ = tx.send(state::AudioSnapshot {
+        volume: rt.volume,
+        muted: rt.muted,
+        kind: rt.kind,
+    });
+}
+
+async fn play_note(play_state: &mut PlayState, rt: &RuntimeState, keycode: Keycode) {
     if play_state.active_sinks.contains_key(&keycode) {
         return;
     }
@@ -38,69 +78,41 @@ pub async fn play_note(play_state: &mut PlayState, keycode: Keycode) {
     let freq = key.frequency();
 
     let sink = Sink::connect_new(&play_state.stream.mixer());
+    sink.set_volume(rt.volume);
+    if rt.muted { sink.pause(); }
 
-    let audio_state = state::get_state().await;
+    let src = basic_source(rt.kind);
+    sink.append(src.create_source(freq));
 
-    let audio_source = {
-        let src_guard = audio_state.source.read().await;
-        src_guard.create_source(freq)
-    };
-
-    let volume = *audio_state.volume.read().await;
-    sink.set_volume(volume);
-
-    if *audio_state.muted.read().await {
-        sink.pause();
-    }
-
-    sink.append(audio_source);
     play_state.active_sinks.insert(keycode, sink);
 }
 
-pub fn stop_note(play_state: &mut PlayState, keycode: Keycode) {
-    if let Some(sink) = play_state.active_sinks.remove(&keycode) {
-        sink.stop();
-    }
-}
-
-pub fn stop_all(play_state: &mut PlayState) {
-    for (_, sink) in play_state.active_sinks.drain() {
-        sink.stop();
-    }
-}
-
-pub async fn sync_volume(play_state: &mut PlayState) {
-    let audio_state = state::get_state().await;
-    let volume = *audio_state.volume.read().await;
-    for sink in play_state.active_sinks.values_mut() {
-        sink.set_volume(volume);
-    }
-}
-
-pub async fn sync_muted_state(play_state: &mut PlayState) {
-    let audio_state = state::get_state().await;
-    let muted = *audio_state.muted.read().await;
-
-    if muted {
-        for sink in play_state.active_sinks.values_mut() {
-            sink.pause();
-        }
-    } else {
-        for sink in play_state.active_sinks.values_mut() {
-            sink.play();
-        }
-    }
-}
-
-pub async fn restart_active_notes(play_state: &mut PlayState) {
+async fn restart_active_notes(play_state: &mut PlayState, rt: &RuntimeState) {
     let keys: Vec<Keycode> = play_state.active_sinks.keys().copied().collect();
     for k in keys {
-        stop_note(play_state, k);
-        play_note(play_state, k).await;
+        play_state.stop_note(k);
+        play_note(play_state, rt, k).await;
     }
 }
 
-pub async fn run_audio() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_audio(
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let _handle = state::get_handle().await.clone();
+    let (mut cmd_rx, snapshot_tx, initial) = state::take_runtime_channels().await;
+
+    let mut rt = RuntimeState {
+        volume: initial.volume,
+        muted: initial.muted,
+        kind: initial.kind,
+    };
+
+    let mut play_state = PlayState::new()?;
+    publish_snapshot(&snapshot_tx, rt);
+
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    let stop_flag_bg = stop_flag.clone();
+
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
     let poll_handle = task::spawn_blocking(move || {
@@ -108,6 +120,11 @@ pub async fn run_audio() -> Result<(), Box<dyn std::error::Error>> {
         let mut prev: HashSet<Keycode> = HashSet::new();
 
         loop {
+            if stop_flag_bg.load(Ordering::Relaxed) {
+                let _ = tx.send(None);
+                break;
+            }
+
             std::thread::sleep(Duration::from_millis(TICK));
             let now: HashSet<Keycode> = device_state.get_keys().into_iter().collect();
 
@@ -120,7 +137,6 @@ pub async fn run_audio() -> Result<(), Box<dyn std::error::Error>> {
 
             if now != prev {
                 let toggle_b = now.contains(&Keycode::B) && !prev.contains(&Keycode::B);
-
                 if tx.send(Some((now.clone(), prev.clone(), toggle_b))).is_err() {
                     break;
                 }
@@ -129,13 +145,6 @@ pub async fn run_audio() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let mut play_state = PlayState::new()?;
-
-    let audio_state = state::get_state().await;
-    let volume_notify: Arc<Notify> = audio_state.volume_notify.clone();
-    let mute_notify: Arc<Notify> = audio_state.mute_notify.clone();
-    let source_notify: Arc<Notify> = audio_state.source_notify.clone();
-
     let ctrl_c = ctrl_c();
     tokio::pin!(ctrl_c);
 
@@ -143,44 +152,64 @@ pub async fn run_audio() -> Result<(), Box<dyn std::error::Error>> {
         tokio::select! {
             _ = &mut ctrl_c => break,
 
+            _ = shutdown.changed() => {
+                if *shutdown.borrow() { break; }
+            }
+
             msg = rx.recv() => {
                 match msg {
                     Some(Some((now, prev, toggle_b))) => {
                         if toggle_b {
-                            let audio_state = state::get_state().await;
-                            audio_state.rotate_source().await;
-                            restart_active_notes(&mut play_state).await;
+                            rt.kind = rt.kind.next();
+                            publish_snapshot(&snapshot_tx, rt);
+                            restart_active_notes(&mut play_state, &rt).await;
                         }
 
                         for k in now.difference(&prev) {
                             if *k == Keycode::B { continue; }
-                            play_note(&mut play_state, *k).await;
+                            play_note(&mut play_state, &rt, *k).await;
                         }
+
                         for k in prev.difference(&now) {
                             if *k == Keycode::B { continue; }
-                            stop_note(&mut play_state, *k);
+                            play_state.stop_note(*k);
                         }
                     }
                     Some(None) | None => break,
                 }
             }
 
-            _ = volume_notify.notified() => {
-                sync_volume(&mut play_state).await;
-            }
+            cmd = cmd_rx.recv() => {
+                let Some(cmd) = cmd else { break };
 
-            _ = mute_notify.notified() => {
-                sync_muted_state(&mut play_state).await;
-            }
-
-            _ = source_notify.notified() => {
-                restart_active_notes(&mut play_state).await;
+                match cmd {
+                    state::AudioCommand::SetVolume(v) => {
+                        rt.volume = v.clamp(0.0, 2.0);
+                        play_state.set_all_volume(rt.volume);
+                        publish_snapshot(&snapshot_tx, rt);
+                    }
+                    state::AudioCommand::SetMuted(m) => {
+                        rt.muted = m;
+                        play_state.set_all_muted(rt.muted);
+                        publish_snapshot(&snapshot_tx, rt);
+                    }
+                    state::AudioCommand::RotateSource => {
+                        rt.kind = rt.kind.next();
+                        publish_snapshot(&snapshot_tx, rt);
+                        restart_active_notes(&mut play_state, &rt).await;
+                    }
+                    state::AudioCommand::SetSource(kind) => {
+                        rt.kind = kind;
+                        publish_snapshot(&snapshot_tx, rt);
+                        restart_active_notes(&mut play_state, &rt).await;
+                    }
+                }
             }
         }
     }
 
-    stop_all(&mut play_state);
+    stop_flag.store(true, Ordering::Relaxed);
+    play_state.stop_all();
     let _ = poll_handle.await;
-
     Ok(())
 }
