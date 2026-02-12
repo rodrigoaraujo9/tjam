@@ -1,6 +1,5 @@
-## What this is
-
-This is a **terminal-based synthesizer** written in Rust.
+# MUGEN
+I am building a  **terminal-based synthesizer** in Rust.
 
 You can play it live from your computer keyboard, switch waveforms on the fly, and layer notes like a real instrument. The goal is not a DAW — it’s a **playable synth** that feels immediate and hackable.
 
