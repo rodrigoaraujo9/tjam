@@ -13,7 +13,7 @@ pub struct AudioSnapshot {
 pub enum AudioCommand {
     SetVolume(f32),
     SetMuted(bool),
-    RotateSource,
+    ToggleSource,
     SetSource(BasicKind),
 }
 
@@ -33,7 +33,7 @@ impl AudioHandle {
     }
 
     pub fn rotate_source(&self) {
-        let _ = self.tx.send(AudioCommand::RotateSource);
+        let _ = self.tx.send(AudioCommand::ToggleSource);
     }
 
     pub fn set_source(&self, kind: BasicKind) {

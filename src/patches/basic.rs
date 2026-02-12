@@ -3,7 +3,7 @@ use std::time::Duration;
 use rodio::Source;
 use rodio::source::{SineWave, SquareWave, TriangleWave, SawtoothWave};
 
-use crate::audio_patch::{AudioSource, DynSrc};
+use crate::audio_patch::{AudioSource, SynthSource};
 use crate::config::{AMP_DEFAULT, ENDLESS, SAMPLE_RATE};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +69,7 @@ struct BasicSource {
 }
 
 impl AudioSource for BasicSource {
-    fn create_source(&self, frequency: f32) -> DynSrc {
+    fn create_source(&self, frequency: f32) -> SynthSource {
         match self.kind {
             BasicKind::Sine => Box::new(
                 SineWave::new(frequency)

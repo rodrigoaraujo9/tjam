@@ -97,6 +97,7 @@ async fn restart_active_notes(play_state: &mut PlayState, rt: &RuntimeState) {
 
 pub async fn run_audio(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
+    focused: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let _handle = state::get_handle().await.clone();
     let (mut cmd_rx, snapshot_tx, initial) = state::take_runtime_channels().await;
@@ -113,11 +114,15 @@ pub async fn run_audio(
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_flag_bg = stop_flag.clone();
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<(HashSet<Keycode>, HashSet<Keycode>, bool)>>();
+
+    let focused_bg = focused.clone();
 
     let poll_handle = task::spawn_blocking(move || {
         let device_state = DeviceState::new();
+
         let mut prev: HashSet<Keycode> = HashSet::new();
+        let mut was_focused = true;
 
         loop {
             if stop_flag_bg.load(Ordering::Relaxed) {
@@ -126,6 +131,28 @@ pub async fn run_audio(
             }
 
             std::thread::sleep(Duration::from_millis(TICK));
+
+            let is_focused = focused_bg.load(Ordering::Relaxed);
+
+            // Focus lost: stop everything once, then ignore input while unfocused.
+            if !is_focused {
+                if was_focused {
+                    if !prev.is_empty() {
+                        let empty: HashSet<Keycode> = HashSet::new();
+                        let _ = tx.send(Some((empty, prev.clone(), false)));
+                        prev.clear();
+                    }
+                    was_focused = false;
+                }
+                continue;
+            }
+
+            if !was_focused {
+                prev = device_state.get_keys().into_iter().collect();
+                was_focused = true;
+                continue;
+            }
+
             let now: HashSet<Keycode> = device_state.get_keys().into_iter().collect();
 
             if now.contains(&Keycode::Escape)
@@ -137,9 +164,7 @@ pub async fn run_audio(
 
             if now != prev {
                 let toggle_b = now.contains(&Keycode::B) && !prev.contains(&Keycode::B);
-                if tx.send(Some((now.clone(), prev.clone(), toggle_b))).is_err() {
-                    break;
-                }
+                let _ = tx.send(Some((now.clone(), prev.clone(), toggle_b)));
                 prev = now;
             }
         }
@@ -180,7 +205,7 @@ pub async fn run_audio(
             }
 
             cmd = cmd_rx.recv() => {
-                let Some(cmd) = cmd else { break };
+                let Some(cmd) = cmd else { break; };
 
                 match cmd {
                     state::AudioCommand::SetVolume(v) => {
@@ -193,7 +218,7 @@ pub async fn run_audio(
                         play_state.set_all_muted(rt.muted);
                         publish_snapshot(&snapshot_tx, rt);
                     }
-                    state::AudioCommand::RotateSource => {
+                    state::AudioCommand::ToggleSource => {
                         rt.kind = rt.kind.next();
                         publish_snapshot(&snapshot_tx, rt);
                         restart_active_notes(&mut play_state, &rt).await;

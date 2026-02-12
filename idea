@@ -1,3 +1,9 @@
+proximo passo -> audio capture
+-> aprender lua, pensar config
+-> adicionar um monte de nodos
+
+
+
 --------- impl ---------
 next step -> implement 1 sink per sound with dynamic mixer, etc instead of multiple sinks
 ratatui ui with -> keyboard at bottom -> support for actual computer keyboard and midi player

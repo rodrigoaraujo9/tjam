@@ -1,19 +1,19 @@
 use rodio::Source;
 
-pub type DynSrc = Box<dyn Source<Item = f32> + Send>;
+pub type SynthSource = Box<dyn Source<Item = f32> + Send>;
 
 pub trait AudioSource: Send + Sync {
-    fn create_source(&self, frequency: f32) -> DynSrc;
+    fn create_source(&self, frequency: f32) -> SynthSource;
     fn name(&self) -> &'static str;
 }
 
 pub trait Node: Send + Sync {
-    fn apply(&self, input: DynSrc) -> DynSrc;
+    fn apply(&self, input: SynthSource) -> SynthSource;
     fn name(&self) -> &'static str;
 }
 
 pub trait Generator: Send + Sync {
-    fn create(&self, frequency: f32) -> DynSrc;
+    fn create(&self, frequency: f32) -> SynthSource;
     fn name(&self) -> &'static str;
 }
 
@@ -34,7 +34,7 @@ impl PatchSource {
 }
 
 impl AudioSource for PatchSource {
-    fn create_source(&self, frequency: f32) -> DynSrc {
+    fn create_source(&self, frequency: f32) -> SynthSource {
         let mut src = self.generator.create(frequency);
         for n in &self.nodes {
             src = n.apply(src);
