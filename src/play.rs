@@ -16,6 +16,7 @@ use crate::key::Key;
 use crate::patches::basic::{basic_source, BasicKind};
 use crate::audio_system;
 
+/// runtime-owned audio output + currently playing notes (one sink per pressed key)
 pub struct PlayState {
     pub stream: OutputStream,
     pub active_sinks: HashMap<Keycode, Sink>,
@@ -54,6 +55,7 @@ impl PlayState {
     }
 }
 
+/// small state used by the runtime to decide how to play notes
 #[derive(Clone, Copy)]
 struct RuntimeState {
     volume: f32,
@@ -61,6 +63,7 @@ struct RuntimeState {
     kind: BasicKind,
 }
 
+/// push the latest runtime state to watchers (UI)
 fn publish_snapshot(tx: &tokio::sync::watch::Sender<audio_system::AudioSnapshot>, rt: RuntimeState) {
     let _ = tx.send(audio_system::AudioSnapshot {
         volume: rt.volume,
@@ -69,6 +72,7 @@ fn publish_snapshot(tx: &tokio::sync::watch::Sender<audio_system::AudioSnapshot>
     });
 }
 
+/// start playing a key if not already active (one sink per key)
 async fn play_note(play_state: &mut PlayState, rt: &RuntimeState, keycode: Keycode) {
     if play_state.active_sinks.contains_key(&keycode) {
         return;
@@ -87,6 +91,7 @@ async fn play_note(play_state: &mut PlayState, rt: &RuntimeState, keycode: Keyco
     play_state.active_sinks.insert(keycode, sink);
 }
 
+/// Recreate all currently held notes (used when waveform/source changes)
 async fn restart_active_notes(play_state: &mut PlayState, rt: &RuntimeState) {
     let keys: Vec<Keycode> = play_state.active_sinks.keys().copied().collect();
     for k in keys {
@@ -95,29 +100,36 @@ async fn restart_active_notes(play_state: &mut PlayState, rt: &RuntimeState) {
     }
 }
 
+/// main audio runtime: listens to keyboard state + UI commands, and drives Rodio sinks
 pub async fn run_audio(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
     focused: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // ensure global audio system is initialized and grab runtime channels
     let _handle = audio_system::get_handle().await.clone();
     let (mut cmd_rx, snapshot_tx, initial) = audio_system::take_runtime_channels().await;
 
+    // boot runtime state from last published snapshot
     let mut rt = RuntimeState {
         volume: initial.volume,
         muted: initial.muted,
         kind: initial.kind,
     };
 
+    // own the audio output + active notes
     let mut play_state = PlayState::new()?;
     publish_snapshot(&snapshot_tx, rt);
 
+    // flag used to stop the polling thread cleanly
     let stop_flag = Arc::new(AtomicBool::new(false));
     let stop_flag_bg = stop_flag.clone();
 
+    // poll thread sends deltas: (now_keys, prev_keys, did_toggle_b_edge)
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<(HashSet<Keycode>, HashSet<Keycode>, bool)>>();
 
     let focused_bg = focused.clone();
 
+    // blocking thread: polls pressed keys at a fixed interval and emits changes
     let poll_handle = task::spawn_blocking(move || {
         let device_state = DeviceState::new();
 
@@ -125,6 +137,7 @@ pub async fn run_audio(
         let mut was_focused = true;
 
         loop {
+            // stop requested by async side
             if stop_flag_bg.load(Ordering::Relaxed) {
                 let _ = tx.send(None);
                 break;
@@ -132,6 +145,7 @@ pub async fn run_audio(
 
             std::thread::sleep(Duration::from_millis(TICK));
 
+            // if unfocused, force-release any previously held keys once
             let is_focused = focused_bg.load(Ordering::Relaxed);
 
             if !is_focused {
@@ -146,12 +160,14 @@ pub async fn run_audio(
                 continue;
             }
 
+            // on refocus, resync baseline without triggering a flood of note-on events
             if !was_focused {
                 prev = device_state.get_keys().into_iter().collect();
                 was_focused = true;
                 continue;
             }
 
+            // normal focused polling -> compute set difference vs previous snapshot
             let now: HashSet<Keycode> = device_state.get_keys().into_iter().collect();
 
             if now.contains(&Keycode::Escape)
@@ -161,6 +177,7 @@ pub async fn run_audio(
                 break;
             }
 
+            // only emit when something changed; also compute rising edge for 'B'
             if now != prev {
                 let toggle_b = now.contains(&Keycode::B) && !prev.contains(&Keycode::B);
                 let _ = tx.send(Some((now.clone(), prev.clone(), toggle_b)));
@@ -172,37 +189,46 @@ pub async fn run_audio(
     let ctrl_c = ctrl_c();
     tokio::pin!(ctrl_c);
 
+    // async event loop: keyboard deltas + UI commands + shutdown.
     loop {
         tokio::select! {
+            // OS-level interrupt
             _ = &mut ctrl_c => break,
 
+            // application-level shutdown flag
             _ = shutdown.changed() => {
                 if *shutdown.borrow() { break; }
             }
 
+            // key delta messages from polling thread
             msg = rx.recv() => {
                 match msg {
                     Some(Some((now, prev, toggle_b))) => {
+                        // edge-trigger waveform toggle (B).
                         if toggle_b {
                             rt.kind = rt.kind.next();
                             publish_snapshot(&snapshot_tx, rt);
                             restart_active_notes(&mut play_state, &rt).await;
                         }
 
+                        // newly pressed keys = note-on
                         for k in now.difference(&prev) {
                             if *k == Keycode::B { continue; }
                             play_note(&mut play_state, &rt, *k).await;
                         }
 
+                        // released keys = note-off
                         for k in prev.difference(&now) {
                             if *k == Keycode::B { continue; }
                             play_state.stop_note(*k);
                         }
                     }
+                    // none means "stop polling / exit"
                     Some(None) | None => break,
                 }
             }
 
+            // UI commands (volume/mute/source) coming from AudioHandle
             cmd = cmd_rx.recv() => {
                 let Some(cmd) = cmd else { break; };
 
@@ -232,6 +258,7 @@ pub async fn run_audio(
         }
     }
 
+    // shutdown: stop poll thread, kill all notes, wait for thread join
     stop_flag.store(true, Ordering::Relaxed);
     play_state.stop_all();
     let _ = poll_handle.await;

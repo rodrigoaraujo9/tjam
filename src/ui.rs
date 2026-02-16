@@ -1,3 +1,4 @@
+// mock ui for now with logo
 
 use std::io;
 use std::io::stdout;

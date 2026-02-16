@@ -2,6 +2,7 @@ use tokio::sync::{mpsc, watch, OnceCell, Mutex};
 
 use crate::patches::basic::BasicKind;
 
+/// current audio state that the UI can read (volume/mute + which source is active).
 #[derive(Debug, Clone, Copy)]
 pub struct AudioSnapshot {
     pub volume: f32,
@@ -9,6 +10,7 @@ pub struct AudioSnapshot {
     pub kind: BasicKind,
 }
 
+/// cmds that the UI sends to the audio runtime to change behavior
 #[derive(Debug)]
 pub enum AudioCommand {
     SetVolume(f32),
@@ -17,6 +19,7 @@ pub enum AudioCommand {
     SetSource(BasicKind),
 }
 
+/// handle used by the UI: send commands + subscribe to live snapshots
 #[derive(Clone)]
 pub struct AudioHandle {
     tx: mpsc::UnboundedSender<AudioCommand>,
@@ -27,30 +30,28 @@ impl AudioHandle {
     pub fn set_volume(&self, v: f32) {
         let _ = self.tx.send(AudioCommand::SetVolume(v));
     }
-
     pub fn set_muted(&self, m: bool) {
         let _ = self.tx.send(AudioCommand::SetMuted(m));
     }
-
     pub fn rotate_source(&self) {
         let _ = self.tx.send(AudioCommand::ToggleSource);
     }
-
     pub fn set_source(&self, kind: BasicKind) {
         let _ = self.tx.send(AudioCommand::SetSource(kind));
     }
-
     pub fn subscribe(&self) -> watch::Receiver<AudioSnapshot> {
         self.snapshot_rx.clone()
     }
 }
 
+/// internal singleton state: exposes a handle + owns the runtime channels.
 struct AudioSystem {
     handle: AudioHandle,
     cmd_rx: Mutex<Option<mpsc::UnboundedReceiver<AudioCommand>>>,
     snapshot_tx: watch::Sender<AudioSnapshot>,
 }
 
+/// global singleton so UI and audio task share the same channels without passing them everywhere
 static AUDIO: OnceCell<AudioSystem> = OnceCell::const_new();
 
 pub async fn get_handle() -> &'static AudioHandle {
