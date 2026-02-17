@@ -25,7 +25,7 @@ impl Adsr {
     }
 }
 
-pub type Gate = Arc<AtomicBool>;
+pub type Gate = Arc<AtomicBool>; // on off
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -56,7 +56,7 @@ pub struct AdsrSource {
     stage: Stage,
     stage_pos: u64,
     current_amp: f32,
-    release_start_amp: f32,
+    target_amp: f32,
 }
 
 impl AdsrSource {
@@ -69,7 +69,7 @@ impl AdsrSource {
             stage: Stage::Attack,
             stage_pos: 0,
             current_amp: 0.0,
-            release_start_amp: 0.0,
+            target_amp: 0.0,
         }
     }
 
@@ -85,7 +85,16 @@ impl AdsrSource {
     }
 
     fn step_envelope(&mut self) -> f32 {
-        0.0
+        // implement step for attack, decay, sustain and release
+        // match the stage we are in -> act accordingly
+        // stage pos (step) depends on sample rate directly
+        // we will be changing amplitude (current_amp) according to stage_pos
+        // y = x * env; on next -> iterator, so multiplicative
+        //
+        // attack  -> amp starts at 0 and increments (propportionally to sample rate and attack_s) until = target_amp
+        // release -> amp starts at target_amp and decrements (propportionally to sample rate and attack_s) until = 0
+        // implement decay and sustain later -> slightly more complex
+        -1.0
     }
 }
 

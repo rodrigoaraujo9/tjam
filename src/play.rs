@@ -15,6 +15,7 @@ use crate::config::TICK;
 use crate::key::Key;
 use crate::patches::basic::{basic_source, BasicKind};
 use crate::audio_system;
+use crate::audio_patch::AudioSource;
 
 /// runtime-owned audio output + currently playing notes (one sink per pressed key)
 pub struct PlayState {
@@ -56,19 +57,20 @@ impl PlayState {
 }
 
 /// small state used by the runtime to decide how to play notes
-#[derive(Clone, Copy)]
 struct RuntimeState {
     volume: f32,
     muted: bool,
-    kind: BasicKind,
+    current_patch: Box<dyn AudioSource>,
+    avaliable_patches: Vec<Box<dyn AudioSource>>,
+    toggle_index: usize,
 }
 
 /// push the latest runtime state to watchers (UI)
-fn publish_snapshot(tx: &tokio::sync::watch::Sender<audio_system::AudioSnapshot>, rt: RuntimeState) {
+fn publish_snapshot(tx: &tokio::sync::watch::Sender<audio_system::AudioSnapshot>, rt: &RuntimeState) {
     let _ = tx.send(audio_system::AudioSnapshot {
         volume: rt.volume,
         muted: rt.muted,
-        kind: rt.kind,
+        patch_name: rt.current_patch.name().to_string(),
     });
 }
 
@@ -85,19 +87,35 @@ async fn play_note(play_state: &mut PlayState, rt: &RuntimeState, keycode: Keyco
     sink.set_volume(rt.volume);
     if rt.muted { sink.pause(); }
 
-    let src = basic_source(rt.kind);
-    sink.append(src.create_source(freq));
+    let src = rt.current_patch.create_source(freq);
+    sink.append(src);
 
     play_state.active_sinks.insert(keycode, sink);
 }
 
-/// Recreate all currently held notes (used when waveform/source changes)
+/// recreate all currently held notes (used when waveform/source changes)
 async fn restart_active_notes(play_state: &mut PlayState, rt: &RuntimeState) {
     let keys: Vec<Keycode> = play_state.active_sinks.keys().copied().collect();
     for k in keys {
         play_state.stop_note(k);
         play_note(play_state, rt, k).await;
     }
+}
+
+/// cycle to next patch in the toggle list
+fn cycle_patch(rt: &mut RuntimeState) {
+    if rt.avaliable_patches.is_empty() {
+        return;
+    }
+    rt.toggle_index = (rt.toggle_index + 1) % rt.avaliable_patches.len();
+    rt.current_patch = basic_source(match rt.toggle_index {
+        0 => BasicKind::Sine,
+        1 => BasicKind::Saw,
+        2 => BasicKind::Square,
+        3 => BasicKind::Triangle,
+        4 => BasicKind::Noise,
+        _ => BasicKind::Sine,
+    });
 }
 
 /// main audio runtime: listens to keyboard state + UI commands, and drives Rodio sinks
@@ -113,12 +131,20 @@ pub async fn run_audio(
     let mut rt = RuntimeState {
         volume: initial.volume,
         muted: initial.muted,
-        kind: initial.kind,
+        current_patch: basic_source(BasicKind::Sine),
+        avaliable_patches: vec![
+            basic_source(BasicKind::Sine),
+            basic_source(BasicKind::Saw),
+            basic_source(BasicKind::Square),
+            basic_source(BasicKind::Triangle),
+            basic_source(BasicKind::Noise),
+        ],
+        toggle_index: 0,
     };
 
     // own the audio output + active notes
     let mut play_state = PlayState::new()?;
-    publish_snapshot(&snapshot_tx, rt);
+    publish_snapshot(&snapshot_tx, &rt);
 
     // flag used to stop the polling thread cleanly
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -206,8 +232,8 @@ pub async fn run_audio(
                     Some(Some((now, prev, toggle_b))) => {
                         // edge-trigger waveform toggle (B).
                         if toggle_b {
-                            rt.kind = rt.kind.next();
-                            publish_snapshot(&snapshot_tx, rt);
+                            cycle_patch(&mut rt);
+                            publish_snapshot(&snapshot_tx, &rt);
                             restart_active_notes(&mut play_state, &rt).await;
                         }
 
@@ -236,21 +262,25 @@ pub async fn run_audio(
                     audio_system::AudioCommand::SetVolume(v) => {
                         rt.volume = v.clamp(0.0, 2.0);
                         play_state.set_all_volume(rt.volume);
-                        publish_snapshot(&snapshot_tx, rt);
+                        publish_snapshot(&snapshot_tx, &rt);
                     }
                     audio_system::AudioCommand::SetMuted(m) => {
                         rt.muted = m;
                         play_state.set_all_muted(rt.muted);
-                        publish_snapshot(&snapshot_tx, rt);
+                        publish_snapshot(&snapshot_tx, &rt);
                     }
-                    audio_system::AudioCommand::ToggleSource => {
-                        rt.kind = rt.kind.next();
-                        publish_snapshot(&snapshot_tx, rt);
-                        restart_active_notes(&mut play_state, &rt).await;
+                    audio_system::AudioCommand::TogglePatch(patches) => {
+                        if !patches.is_empty() {
+                            rt.avaliable_patches = patches;
+                            rt.toggle_index = 0;
+                            rt.current_patch = basic_source(BasicKind::Sine); // Reset to first
+                            publish_snapshot(&snapshot_tx, &rt);
+                            restart_active_notes(&mut play_state, &rt).await;
+                        }
                     }
-                    audio_system::AudioCommand::SetSource(kind) => {
-                        rt.kind = kind;
-                        publish_snapshot(&snapshot_tx, rt);
+                    audio_system::AudioCommand::SetPatch(patch) => {
+                        rt.current_patch = patch;
+                        publish_snapshot(&snapshot_tx, &rt);
                         restart_active_notes(&mut play_state, &rt).await;
                     }
                 }

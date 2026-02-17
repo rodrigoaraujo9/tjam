@@ -1,7 +1,8 @@
 # Mugen
-I am building a  **terminal-based synthesizer** in Rust.
 
-You can play it live from your computer keyboard, switch waveforms on the fly, and layer notes like a real instrument. The goal is not a DAW — it’s a **playable synth** that feels immediate and hackable.
+I am building a **terminal-based synthesizer** in Rust.
+
+You can play it live from your computer keyboard, switch waveforms as you go, and layer notes like a real instrument. The goal is not a DAW — it’s a **playable synth** that feels immediate and hackable.
 
 Right now it focuses on:
 
@@ -32,14 +33,12 @@ You can rotate between them while playing.
 
 ---
 
-## How it thinks (very simply)
+## How it works (very simply)
 
 - **Generator** → produces sound (sine, saw, etc.)
 - **Node** → changes sound (filters, effects, modulation)
 - **PatchSource** → generator + chain of nodes
 - The synth just plays the current patch for each key you press
-
-That’s it.
 
 ---
 
@@ -47,20 +46,19 @@ That’s it.
 
 ### Short term
 
-- Audio capture
-- Learn **Lua** for config / scripting
-- Make patches configurable
-- Add lots of nodes
+- Audio capture and oscilator/audio wave visualization
+- Use **Lua** for config / scripting allowing user to have his own presets
+- Make patches and fx configurable and dynamically loadable (third-party friendly)
+- Add essential fx (adsr, phase distortion, cutoff, etc.)
 
 ### Synth improvements
 
-- One sink per voice with a **dynamic mixer** (instead of many sinks)
+- One sink per voice with a **dynamic mixer** (instead of many sinks) ??
 - Proper **envelope controls**  
   (attack, decay, sustain, release)
 - Unison, detune, LFO, glide/portamento
 - Mono / poly modes
 - Effects (reverb, delay, distortion, flanger, phaser)
-- Visualizers (waveform, volume, spectrum)
 
 ### UI
 
@@ -68,12 +66,7 @@ That’s it.
     - keyboard drawn at the bottom
     - knobs/sliders for synth parameters
     - support for real keyboard + MIDI input
-
-### Later
-
-- Load and play WAV files
-- Record output to WAV
-- Record full sessions
+    - visualizers (waveform, volume, spectrum)
 
 ---
 
@@ -81,6 +74,7 @@ That’s it.
 
 A **CLI synth you can jam with friends**.
 
+- Logic Pro compatibility
 - Encrypted P2P sessions
 - Everyone hears what everyone plays (like a band)
 - Each player can bind sounds to keys
@@ -94,7 +88,3 @@ A **CLI synth you can jam with friends**.
 - Low-latency streaming (<50ms target)
 
 Session owner mixes audio and distributes it back to peers.
-
----
-
-Sounds simple enough!

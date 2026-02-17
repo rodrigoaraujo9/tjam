@@ -2,6 +2,8 @@ proximo passo -> audio capture
 -> aprender lua, pensar config
 -> adicionar um monte de nodos
 
+-> os fx e os patches são loaded das respetivas pastas dinamicamente quando o programa inicia
+
 
 
 --------- impl ---------

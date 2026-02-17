@@ -1,22 +1,20 @@
 use tokio::sync::{mpsc, watch, OnceCell, Mutex};
-
-use crate::patches::basic::BasicKind;
+use crate::audio_patch::AudioSource;
 
 /// current audio state that the UI can read (volume/mute + which source is active).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AudioSnapshot {
     pub volume: f32,
     pub muted: bool,
-    pub kind: BasicKind,
+    pub patch_name: String,
 }
 
 /// cmds that the UI sends to the audio runtime to change behavior
-#[derive(Debug)]
 pub enum AudioCommand {
     SetVolume(f32),
     SetMuted(bool),
-    ToggleSource,
-    SetSource(BasicKind),
+    TogglePatch(Vec<Box<dyn AudioSource>>),
+    SetPatch(Box<dyn AudioSource>),
 }
 
 /// handle used by the UI: send commands + subscribe to live snapshots
@@ -30,15 +28,19 @@ impl AudioHandle {
     pub fn set_volume(&self, v: f32) {
         let _ = self.tx.send(AudioCommand::SetVolume(v));
     }
+
     pub fn set_muted(&self, m: bool) {
         let _ = self.tx.send(AudioCommand::SetMuted(m));
     }
-    pub fn rotate_source(&self) {
-        let _ = self.tx.send(AudioCommand::ToggleSource);
+
+    pub fn toggle_patch(&self, patches: Vec<Box<dyn AudioSource>>) {
+        let _ = self.tx.send(AudioCommand::TogglePatch(patches));
     }
-    pub fn set_source(&self, kind: BasicKind) {
-        let _ = self.tx.send(AudioCommand::SetSource(kind));
+
+    pub fn set_patch(&self, patch: Box<dyn AudioSource>) {
+        let _ = self.tx.send(AudioCommand::SetPatch(patch));
     }
+
     pub fn subscribe(&self) -> watch::Receiver<AudioSnapshot> {
         self.snapshot_rx.clone()
     }
@@ -58,15 +60,12 @@ pub async fn get_handle() -> &'static AudioHandle {
     &AUDIO
         .get_or_init(|| async {
             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-
             let initial = AudioSnapshot {
                 volume: 1.0,
                 muted: false,
-                kind: BasicKind::Sine,
+                patch_name: "Sine".to_string(),
             };
-
             let (snapshot_tx, snapshot_rx) = watch::channel(initial);
-
             AudioSystem {
                 handle: AudioHandle { tx: cmd_tx, snapshot_rx },
                 cmd_rx: Mutex::new(Some(cmd_rx)),
@@ -80,10 +79,8 @@ pub async fn get_handle() -> &'static AudioHandle {
 pub async fn take_runtime_channels(
 ) -> (mpsc::UnboundedReceiver<AudioCommand>, watch::Sender<AudioSnapshot>, AudioSnapshot) {
     let sys = AUDIO.get_or_init(|| async { unreachable!("call get_handle() first") }).await;
-
     let mut guard = sys.cmd_rx.lock().await;
-    let rx = guard.take().expect("Audio runtime already taken");
-
-    let initial = *sys.snapshot_tx.borrow();
+    let rx = guard.take().expect("audio runtime already taken");
+    let initial = sys.snapshot_tx.borrow().clone();
     (rx, sys.snapshot_tx.clone(), initial)
 }

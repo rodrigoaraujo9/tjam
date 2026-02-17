@@ -31,6 +31,7 @@ impl PatchSource {
     pub fn new(generator: Box<dyn Generator>) -> Self {
         Self { generator, nodes: vec![] }
     }
+
     pub fn push_node(mut self, node: Box<dyn Node>) -> Self {
         self.nodes.push(node);
         self
@@ -45,6 +46,7 @@ impl AudioSource for PatchSource {
         }
         src
     }
+
     fn name(&self) -> &'static str {
         self.generator.name()
     }
