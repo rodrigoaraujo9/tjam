@@ -1,5 +1,7 @@
 use tokio::sync::{mpsc, watch, OnceCell, Mutex};
 use crate::audio_patch::AudioSource;
+use crate::fx::adsr::Adsr;
+
 
 /// current audio state that the UI can read (volume/mute + which source is active).
 #[derive(Debug, Clone)]
@@ -15,6 +17,7 @@ pub enum AudioCommand {
     SetMuted(bool),
     TogglePatch(Vec<Box<dyn AudioSource>>),
     SetPatch(Box<dyn AudioSource>),
+    SetAdsr(Adsr),
 }
 
 /// handle used by the UI: send commands + subscribe to live snapshots
@@ -39,6 +42,10 @@ impl AudioHandle {
 
     pub fn set_patch(&self, patch: Box<dyn AudioSource>) {
         let _ = self.tx.send(AudioCommand::SetPatch(patch));
+    }
+
+    pub fn set_adsr(&self, adsr: Adsr) {
+        let _ = self.tx.send(AudioCommand::SetAdsr(adsr));
     }
 
     pub fn subscribe(&self) -> watch::Receiver<AudioSnapshot> {

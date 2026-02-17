@@ -11,16 +11,19 @@ use rodio::Sink;
 
 use tokio::{signal::ctrl_c, task};
 
-use crate::config::TICK;
+use crate::config::{TICK, SAMPLE_RATE, ADSR_ATTACK_S, ADSR_DECAY_S, ADSR_SUSTAIN, ADSR_RELEASE_S};
 use crate::key::Key;
 use crate::patches::basic::{basic_source, BasicKind};
+use crate::fx::adsr::{Adsr, AdsrNode, Gate};
 use crate::audio_system;
-use crate::audio_patch::AudioSource;
+use crate::audio_patch::{AudioSource, Node};
+
+pub type ActiveNote = (Sink, Gate);
 
 /// runtime-owned audio output + currently playing notes (one sink per pressed key)
 pub struct PlayState {
     pub stream: OutputStream,
-    pub active_sinks: HashMap<Keycode, Sink>,
+    pub active_sinks: HashMap<Keycode, ActiveNote>,
 }
 
 impl PlayState {
@@ -30,28 +33,30 @@ impl PlayState {
     }
 
     fn stop_note(&mut self, keycode: Keycode) {
-        if let Some(sink) = self.active_sinks.remove(&keycode) {
-            sink.stop();
+        if let Some((sink, gate)) = self.active_sinks.remove(&keycode) {
+            gate.store(false, Ordering::Relaxed);
+            drop(sink);
         }
     }
 
     fn stop_all(&mut self) {
-        for (_, sink) in self.active_sinks.drain() {
-            sink.stop();
+        for (_, (sink, gate)) in self.active_sinks.drain() {
+            gate.store(false, Ordering::Relaxed);
+            drop(sink);
         }
     }
 
     fn set_all_volume(&mut self, v: f32) {
-        for sink in self.active_sinks.values_mut() {
+        for (sink, _) in self.active_sinks.values_mut() {
             sink.set_volume(v);
         }
     }
 
     fn set_all_muted(&mut self, muted: bool) {
         if muted {
-            for sink in self.active_sinks.values_mut() { sink.pause(); }
+            for (sink, _) in self.active_sinks.values_mut() { sink.pause(); }
         } else {
-            for sink in self.active_sinks.values_mut() { sink.play(); }
+            for (sink, _) in self.active_sinks.values_mut() { sink.play(); }
         }
     }
 }
@@ -60,6 +65,7 @@ impl PlayState {
 struct RuntimeState {
     volume: f32,
     muted: bool,
+    adsr: Adsr,
     current_patch: Box<dyn AudioSource>,
     avaliable_patches: Vec<Box<dyn AudioSource>>,
     toggle_index: usize,
@@ -83,14 +89,18 @@ async fn play_note(play_state: &mut PlayState, rt: &RuntimeState, keycode: Keyco
     let Some(key) = Key::from_keycode(keycode) else { return; };
     let freq = key.frequency();
 
+    let gate: Gate = Arc::new(AtomicBool::new(true)); // gate ON
+
     let sink = Sink::connect_new(&play_state.stream.mixer());
     sink.set_volume(rt.volume);
     if rt.muted { sink.pause(); }
 
-    let src = rt.current_patch.create_source(freq);
+    let raw_src = rt.current_patch.create_source(freq);
+    let adsr_node = AdsrNode::new(rt.adsr, SAMPLE_RATE, gate.clone());
+    let src = adsr_node.apply(raw_src);
     sink.append(src);
 
-    play_state.active_sinks.insert(keycode, sink);
+    play_state.active_sinks.insert(keycode, (sink, gate));
 }
 
 /// recreate all currently held notes (used when waveform/source changes)
@@ -131,6 +141,7 @@ pub async fn run_audio(
     let mut rt = RuntimeState {
         volume: initial.volume,
         muted: initial.muted,
+        adsr: Adsr::new(ADSR_ATTACK_S, ADSR_DECAY_S, ADSR_SUSTAIN, ADSR_RELEASE_S),
         current_patch: basic_source(BasicKind::Sine),
         avaliable_patches: vec![
             basic_source(BasicKind::Sine),
@@ -243,7 +254,7 @@ pub async fn run_audio(
                             play_note(&mut play_state, &rt, *k).await;
                         }
 
-                        // released keys = note-off
+                        // key release: signal gate off → ADSR release plays out
                         for k in prev.difference(&now) {
                             if *k == Keycode::B { continue; }
                             play_state.stop_note(*k);
@@ -273,13 +284,18 @@ pub async fn run_audio(
                         if !patches.is_empty() {
                             rt.avaliable_patches = patches;
                             rt.toggle_index = 0;
-                            rt.current_patch = basic_source(BasicKind::Sine); // Reset to first
+                            rt.current_patch = basic_source(BasicKind::Sine);
                             publish_snapshot(&snapshot_tx, &rt);
                             restart_active_notes(&mut play_state, &rt).await;
                         }
                     }
                     audio_system::AudioCommand::SetPatch(patch) => {
                         rt.current_patch = patch;
+                        publish_snapshot(&snapshot_tx, &rt);
+                        restart_active_notes(&mut play_state, &rt).await;
+                    }
+                    audio_system::AudioCommand::SetAdsr(adsr) => {
+                        rt.adsr = adsr;
                         publish_snapshot(&snapshot_tx, &rt);
                         restart_active_notes(&mut play_state, &rt).await;
                     }
