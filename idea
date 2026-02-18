@@ -1,3 +1,11 @@
+
+ui
+tab -> change focused component (source/fx(adsr)/volume)
+m -> mute
+
+
+
+
 proximo passo -> audio capture
 -> aprender lua, pensar config
 -> adicionar um monte de nodos

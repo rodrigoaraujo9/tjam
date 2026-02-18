@@ -15,8 +15,9 @@ pub const AMP_DEFAULT:f32 = 0.1;
 //patches
 pub const SAMPLE_RATE: u32 = 48_000;
 pub const ENDLESS: Duration = Duration::from_secs(3600);
+
 // ADSR defaults
-pub const ADSR_ATTACK_S: f32  = 0.05; //sec
-pub const ADSR_DECAY_S: f32   = 0.1; //sec
-pub const ADSR_SUSTAIN: f32   = 0.0; //0..1
+pub const ADSR_ATTACK_S: f32  = 0.5; //sec
+pub const ADSR_DECAY_S: f32   = 0.5; //sec
+pub const ADSR_SUSTAIN: f32   = 0.4; //0..1
 pub const ADSR_RELEASE_S: f32 = 1.0; //sec

@@ -6,9 +6,11 @@ use std::{
     },
     time::Duration,
 };
+
 use crate::audio_patch::Node;
 
 pub type SynthSource = Box<dyn Source<Item = f32> + Send>;
+pub type Gate = Arc<AtomicBool>;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Adsr {
@@ -18,33 +20,36 @@ pub struct Adsr {
     pub release_s: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
 pub struct AdsrEnvelope {
     pub sustain: f32,
     pub attack_step: f32,
     pub decay_step: f32,
-    pub release_step: f32,
+    pub release_samples: f32,
 }
 
 impl Adsr {
-    pub fn to_envelope(&self, sample_rate: u32) -> AdsrEnvelope {
-        let sr = sample_rate as f32;
-        let attack_samples = (self.attack_s * sr).max(1.0);
-        let decay_samples = (self.decay_s * sr).max(1.0);
-        let release_samples = (self.release_s * sr).max(1.0);
-        AdsrEnvelope {
-            sustain: self.sustain,
-            attack_step: 1.0 / attack_samples,
-            decay_step: (1.0 - self.sustain) / decay_samples,
-            release_step: self.sustain / release_samples,
-        }
-    }
-
     pub fn new(attack_s: f32, decay_s: f32, sustain: f32, release_s: f32) -> Self {
         Self { attack_s, decay_s, sustain, release_s }
     }
-}
 
-pub type Gate = Arc<AtomicBool>;
+    pub fn to_envelope(&self, sample_rate: u32) -> AdsrEnvelope {
+        let sr = sample_rate as f32;
+
+        let attack_samples = (self.attack_s.max(0.0) * sr).max(1.0);
+        let decay_samples = (self.decay_s.max(0.0) * sr).max(1.0);
+        let release_samples = (self.release_s.max(0.0) * sr).max(1.0);
+
+        let sustain = self.sustain.clamp(0.0, 1.0);
+
+        AdsrEnvelope {
+            sustain,
+            attack_step: 1.0 / attack_samples,
+            decay_step: (1.0 - sustain) / decay_samples,
+            release_samples,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage { Attack, Decay, Sustain, Release, Done }
@@ -64,10 +69,11 @@ impl AdsrNode {
 pub struct AdsrSource {
     input: SynthSource,
     envelope: AdsrEnvelope,
-    sample_rate: u32,
     gate: Gate,
+    sample_rate: u32,
     stage: Stage,
     current_amp: f32,
+    release_step: f32,
 }
 
 impl AdsrSource {
@@ -75,11 +81,17 @@ impl AdsrSource {
         Self {
             input,
             envelope: adsr.to_envelope(sample_rate),
-            sample_rate,
             gate,
+            sample_rate,
             stage: Stage::Attack,
             current_amp: 0.0,
+            release_step: 0.0,
         }
+    }
+
+    fn enter_release(&mut self) {
+        self.stage = Stage::Release;
+        self.release_step = self.current_amp / self.envelope.release_samples.max(1.0);
     }
 
     fn step_envelope(&mut self) -> f32 {
@@ -87,9 +99,7 @@ impl AdsrSource {
             && self.stage != Stage::Release
             && self.stage != Stage::Done
         {
-            self.stage = Stage::Release;
-            self.envelope.release_step = self.current_amp
-                / (self.envelope.release_step.recip()).max(1.0);
+            self.enter_release();
         }
 
         match self.stage {
@@ -111,7 +121,7 @@ impl AdsrSource {
                 self.current_amp = self.envelope.sustain;
             }
             Stage::Release => {
-                self.current_amp -= self.envelope.release_step;
+                self.current_amp -= self.release_step;
                 if self.current_amp <= 0.0 {
                     self.current_amp = 0.0;
                     self.stage = Stage::Done;
@@ -128,11 +138,19 @@ impl AdsrSource {
 
 impl Iterator for AdsrSource {
     type Item = f32;
+
     fn next(&mut self) -> Option<f32> {
-        if self.stage == Stage::Done { return None; }
+        if self.stage == Stage::Done {
+            return None;
+        }
+
         let x = self.input.next()?;
         let env = self.step_envelope();
-        if self.stage == Stage::Done { return None; }
+
+        if self.stage == Stage::Done {
+            return None;
+        }
+
         Some(x * env)
     }
 }
